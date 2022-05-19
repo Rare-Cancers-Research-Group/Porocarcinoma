@@ -4,7 +4,7 @@ output: html_notebook
 ---
 
 
-```{r Libraries}
+```{r Libraries, include=FALSE}
 library(tidyverse)
 library(edgeR)
 library(stringr)
@@ -23,8 +23,15 @@ library(meshes)
 library(pvclust)
 library(reticulate)
 library(umap)
+library(factoextra)
 source("../../generic code/AuxFunctions.R")
 ```
+
+```{r Setting some variables}
+run.date <- format(Sys.time(), "%d.%m.%y")
+set.seed(2022)
+```
+
 
 ```{r Reading Bluebee htseq count files}
 data.directories <- list.dirs(path = "/Volumes/VarastoPool/University_research_data/Porocarcinoma/transkriptomidata/bluebee_data/",recursive = FALSE)
@@ -172,3 +179,73 @@ ggplot(umap.tb, aes(x=x, y=y)) + geom_point(aes(colour=sample.type)) + theme_min
 ```
 
 Here I used advanced dimensional reduction method called UMAP. It is used a lot in the sc-seq side, but it has been shown outperform PCA in bulk RNA seq data as well. It is done here from entire dataset with aim to show which samples look like each others in terms of their transcriptomic profile. Each dot is one sample, with sample type described according to the legend. Axes are not meant to be interpretable in other way than indication of similarity/difference between samples. These groups form sensible sets for DGE analysis.
+
+
+```{r}
+fviz_nbclust(umap.tb[,1:2], kmeans, method = "silhouette")
+```
+
+```{r}
+k2 <- kmeans(umap.tb[,1:2], centers = 3, nstart = 25)
+fviz_cluster(k2, data = umap.tb[,1:2])
+```
+
+```{r}
+htseq.counts.dge.2 <- estimateDisp(htseq.counts.dge)
+htseq.counts.dge.2$samples$group <- k2$cluster
+```
+
+# Results {.tabset}
+
+## Group 1 vs 2 diff exp test
+
+```{r}
+diff.g.1.2 <- exactTest(htseq.counts.dge.2, pair=c(1,2))
+diff.top.1.2 <- topTags(diff.g.1.2, n = 200, p.value = 0.05, sort.by="logFC")
+create_dt(data.frame(diff.top.1.2$table))
+```
+Top (logFC) 200 genes
+
+## Group 1 vs 3 diff exp test
+
+```{r}
+diff.g.1.3 <- exactTest(htseq.counts.dge.2, pair=c(1,3))
+diff.top.1.3 <- topTags(diff.g.1.3, n = 200, p.value = 0.05, sort.by="logFC")
+create_dt(data.frame(diff.top.1.3$table))
+```
+Top (logFC) 200 genes
+
+## Group 2 vs 3 diff exp test
+
+```{r}
+diff.g.2.3 <- exactTest(htseq.counts.dge.2, pair=c(2,3))
+diff.top.2.3 <- topTags(diff.g.2.3, n = 200, p.value = 0.05, sort.by="logFC")
+create_dt(data.frame(diff.top.2.3$table))
+```
+Top (logFC) 200 genes
+
+## Poroma vs Porocarcinoma diff exp test
+
+```{r Running diff. exp. analysis between poroma and porocarcinoma}
+# htseq.counts.dge$samples$MCPyV <- htseq.counts.dge$samples$group
+# htseq.counts.dge$samples$group <- htseq.counts.dge$samples$MM_death
+# 
+htseq.counts.dge <- estimateDisp(htseq.counts.dge)
+diff.g <- exactTest(htseq.counts.dge, pair=c("poroma","porocarcinoma"))
+diff.genes.all <- as_tibble(data.frame(topTags(diff.g, n = nrow(diff.g$genes), p.value = 0.05, sort.by="logFC")))
+create_dt(diff.genes.all)
+```
+
+
+
+# Extra 
+
+```{r Save image}
+save.image(paste("Porocarcinoma.image.",run.date,".RData"))
+```
+
+```{r sessionInfo}
+sessionInfo()
+```
+
+
