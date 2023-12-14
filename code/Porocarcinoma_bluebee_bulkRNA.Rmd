@@ -21,6 +21,7 @@ library(MeSHDbi)
 library(ReactomePA)
 library(meshes)
 library(pvclust)
+library(ggrepel)
 library(reticulate)
 library(umap)
 library(factoextra)
@@ -32,6 +33,9 @@ run.date <- format(Sys.time(), "%d.%m.%y")
 set.seed(2022)
 ```
 
+```{r}
+poro.known.genes <- readxl::read_xlsx("../analysis/Poroca_aiemmin_tunnetut_geenit.xlsx", col_names = "Symbol")
+```
 
 ```{r Reading Bluebee htseq count files}
 data.directories <- list.dirs(path = "/Volumes/VarastoPool/University_research_data/Porocarcinoma/transkriptomidata/bluebee_data/",recursive = FALSE)
@@ -148,7 +152,6 @@ engs.ids <- rownames(highly_variable_lcpm)
 rownames(highly_variable_lcpm) <- ann.f$SYMBOL[match(engs.ids, ann.f$ENSEMBL)]
 ```
 
-
 ```{r Plot top 250 genes heatmap, fig.width=12, fig.height=24}
 ## Get some nicer colours
 mypalette <- brewer.pal(11,"RdYlBu")
@@ -164,18 +167,43 @@ legend("topright", title = "Sample type",legend=c("Porocarcinoma","Poroma","Skin
        fill=c("red","yellow","green"), cex=0.8, box.lty=0)
 ```
 
+```{r Draw separate heatmap from selected known poro genes, fig.width=12, fig.height=18}
+known.poro.ensg <- htseq.counts.dge$genes$ENSEMBL[match(poro.known.genes$Symbol, htseq.counts.dge$genes$SYMBOL)]
+known.poro.ensg <- known.poro.ensg[!is.na(known.poro.ensg)]
+
+known.poro.mat <- logcounts[known.poro.ensg,]
+colnames(known.poro.mat) <- paste(htseq.counts.dge$samples$group,"_",colnames(known.poro.mat), sep="")
+
+rownames(known.poro.mat) <- htseq.counts.dge$genes$SYMBOL[match(known.poro.ensg, htseq.counts.dge$genes$ENSEMBL)]
+
+
+## Get some nicer colours
+mypalette <- brewer.pal(11,"RdYlBu")
+morecols <- colorRampPalette(mypalette)
+
+# Set up colour vector for celltype variable
+col.cell <- c("red","yellow","green")[htseq.counts.dge$samples$group]
+
+# Plot the heatmap
+h2 <- heatmap.2(known.poro.mat,col=rev(morecols(50)),trace="none", main="Selected known porocarcinoma related genes",ColSideColors=col.cell,scale="row", hclustfun = function(x) hclust(x, method="ward.D2"), distfun = function(x) as.dist(1-cor(t(x))), margins = c(30,10), cexCol=.7, cexRow = 1.5)
+
+legend("topright", title = "Sample type",legend=c("Porocarcinoma","Poroma","Skin"),
+       fill=c("red","yellow","green"), cex=0.8, box.lty=0)
+```
+
+
 ```{r Run pvclust, fig.width=12}
 # pvclust.highly.variable <- pvclust(highly_variable_lcpm, method.hclust="ward.D2", method.dist="correlation", parallel = FALSE, nboot=5000)
 # plot(pvclust.highly.variable)
 ```
 
-```{r Calculate and draw UMAP}
-colnames(logcounts) <- paste(htseq.counts.dge$samples$group,"_",colnames(logcounts), sep="")
-logcounts.umap <- umap(t(logcounts), method="naive", min_dist=0.01, spread=0.1)
+```{r Calculate and draw UMAP, fig.width=12, fig.height=12}
+#colnames(logcounts) <- paste(htseq.counts.dge$samples$group,"_",colnames(logcounts), sep="")
+#logcounts.umap <- umap(t(logcounts), method="naive", min_dist=0.01, spread=0.1)
 
-umap.tb <- tibble(x=logcounts.umap$layout[,1],y=logcounts.umap$layout[,2],sample.type=factor(str_extract(rownames(logcounts.umap$layout), pattern = "^[a-z]*")))
+umap.tb <- tibble(x=logcounts.umap$layout[,1],y=logcounts.umap$layout[,2],sample_name=rownames(htseq.counts.dge$samples), sample.type=factor(str_extract(rownames(logcounts.umap$layout), pattern = "^[a-z]*")))
 
-ggplot(umap.tb, aes(x=x, y=y)) + geom_point(aes(colour=sample.type)) + theme_minimal()
+ggplot(umap.tb, aes(x=x, y=y)) + geom_point(aes(colour=sample.type)) + theme_minimal() + geom_label_repel(aes(label = sample_name), segment.color = 'grey50')
 ```
 
 Here I used advanced dimensional reduction method called UMAP. It is used a lot in the sc-seq side, but it has been shown outperform PCA in bulk RNA seq data as well. It is done here from entire dataset with aim to show which samples look like each others in terms of their transcriptomic profile. Each dot is one sample, with sample type described according to the legend. Axes are not meant to be interpretable in other way than indication of similarity/difference between samples. These groups form sensible sets for DGE analysis.
@@ -219,7 +247,7 @@ Top (logFC) 200 genes
 
 ```{r}
 diff.g.2.3 <- exactTest(htseq.counts.dge.2, pair=c(2,3))
-diff.top.2.3 <- topTags(diff.g.2.3, n = 200, p.value = 0.05, sort.by="logFC")
+diff.top.2.3 <- topTags(diff.g.2.3, n = 200, p.value = 0.05, sort.by="logFC")‡˜
 create_dt(data.frame(diff.top.2.3$table))
 ```
 Top (logFC) 200 genes
