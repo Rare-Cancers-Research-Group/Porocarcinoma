@@ -1,0 +1,279 @@
+---
+title: "R Notebook of processing Bluebee bulk RNA sequenced porocarcinoma samples"
+output: html_notebook
+---
+
+
+```{r Libraries, include=FALSE}
+library(tidyverse)
+library(edgeR)
+library(stringr)
+library(EnsDb.Hsapiens.v86)
+library(RColorBrewer)
+library(AnnotationHub)
+library(gplots)
+library(DelayedMatrixStats)
+library(biomaRt)
+library(org.Hs.eg.db)
+library(clusterProfiler)
+library(enrichplot)
+library(MeSHDbi)
+library(ReactomePA)
+library(meshes)
+library(pvclust)
+library(ggrepel)
+library(reticulate)
+library(umap)
+library(factoextra)
+source("../../generic code/AuxFunctions.R")
+```
+
+```{r Setting some variables}
+run.date <- format(Sys.time(), "%d.%m.%y")
+set.seed(2022)
+```
+
+```{r}
+poro.known.genes <- readxl::read_xlsx("../analysis/Poroca_aiemmin_tunnetut_geenit.xlsx", col_names = "Symbol")
+```
+
+```{r Reading Bluebee htseq count files}
+data.directories <- list.dirs(path = "/Volumes/VarastoPool/University_research_data/Porocarcinoma/transkriptomidata/bluebee_data/",recursive = FALSE)
+htseq.counts <- lapply(data.directories, function(d){
+  data.sub.folders <- list.dirs(path = d,recursive = FALSE)
+  htseq.count.folder.i <- str_which(string=data.sub.folders,pattern = "htseq-count.*")
+  ht.seq.count.file <- list.files(data.sub.folders[htseq.count.folder.i])
+  sample.id <- sub(x = ht.seq.count.file, pattern = "\\.fastq.*", replacement = "")
+  htseq.counts.tmp <- read_tsv(file = paste(data.sub.folders[htseq.count.folder.i],ht.seq.count.file,sep="/"), col_names = c("ensg_id","count"), show_col_types = FALSE)
+  list(sample.id=sample.id, data=htseq.counts.tmp)
+})
+
+htseq.counts.tb <- bind_rows(htseq.counts)
+htseq.counts.tb$data$sample.id <- htseq.counts.tb$sample.id
+htseq.counts.tb <- spread(htseq.counts.tb$data, key="sample.id", value="count")
+ensg.id.row.i <- str_which(htseq.counts.tb$ensg_id, pattern = "^ENSG.*")
+```
+
+```{r Reading clinical metadata}
+sample.data <- readxl::read_xlsx("/Users/kilpinen/OneDrive - University of Helsinki/Porokarsinooma/SampleData/SampleData.xlsx", sheet="ForR", col_names = TRUE)
+```
+
+
+```{r # Filter count data and clinical data to match each other}
+# Samples with clinical metadata
+samples.wt.clin.data <- colnames(htseq.counts.tb[-1])[str_extract(colnames(htseq.counts.tb[-1]), pattern = "^\\w\\d+") %in% sample.data$`Sample ID`]
+htseq.counts.tb.f <- htseq.counts.tb[,c("ensg_id",paste(samples.wt.clin.data, sep=","))]
+
+# Move ensg_id to rownames as DESeq2 does support only that
+ensg.ids <- htseq.counts.tb.f$ensg_id
+htseq.counts.df.f <- as.data.frame(htseq.counts.tb.f[,samples.wt.clin.data])
+rownames(htseq.counts.df.f) <- ensg.ids
+
+# Taking QC values to separate tibble
+htseq.qc <- htseq.counts.df.f[-ensg.id.row.i,]
+htseq.counts.df.f <-htseq.counts.df.f[ensg.id.row.i,]
+
+# Reorder and filter clinical data to match count data
+sample.data.f <- sample.data[match(str_extract(samples.wt.clin.data, pattern = "^\\w\\d+"),sample.data$`Sample ID`),]
+```
+
+```{r Fetching annotation from AnnotationHub}
+ah <- AnnotationHub()
+orgs <- subset(ah, ah$rdataclass == "OrgDb")
+orgdb <- query(orgs, "Homo sapiens")[[1]]
+ann <- select(orgdb,keys=rownames(htseq.counts.df.f),keytype="ENSEMBL", columns=c("SYMBOL","GENETYPE","GENENAME"))
+
+# Picking only data for genes having genetype=="protein-coding"
+ann.f <- dplyr::filter(ann,ann$GENETYPE=="protein-coding")
+htseq.counts.df.f <- htseq.counts.df.f[ann.f$ENSEMBL,]
+```
+
+```{r Import data into DGElist object}
+htseq.counts.dge <- DGEList(htseq.counts.df.f, group=sample.data.f$Sample_Type)
+```
+
+```{r Finding genes to keep based on experimental design groups}
+genes.to.keep <- filterByExpr(htseq.counts.dge)
+```
+
+```{r Adding gene annotation to DGElist}
+gene.ids <- mapIds(org.Hs.eg.db, keys=rownames(htseq.counts.dge), keytype="ENSEMBL", column="SYMBOL")
+htseq.counts.dge$genes <- data.frame(ENSEMBL=rownames(htseq.counts.dge), SYMBOL=gene.ids)
+```
+
+```{r Filtering data object}
+htseq.counts.dge <-htseq.counts.dge[genes.to.keep,]
+```
+
+```{r Calculate log2 counts per million reads}
+logcounts <- edgeR::cpm(htseq.counts.dge,log=TRUE)
+```
+
+```{r Plot log counts}
+boxplot(logcounts, xlab="", ylab="Log2 counts per million",las=2)
+abline(h=median(logcounts),col="blue")
+title("Boxplots of logCPMs (unnormalised)")
+```
+
+# ```{r Calculate outliers in terms of median}
+# # +-10% range around median of medians
+# median.of.medians <- median(colMedians(logcounts))
+# range.10 <- median.of.medians*.10
+# accepted.samples <- which(colMedians(logcounts) > median.of.medians-range.10 & colMedians(logcounts) < median.of.medians+range.10)
+# ```
+# 
+# ```{r Dropping samples based on logcount filtering}
+# # Dropping samples of which median is more than +-10% outside of median of medians
+# # Transforming data to logcounts
+# htseq.counts.dge <- htseq.counts.dge[,accepted.samples]
+# logcounts <- logcounts[,accepted.samples]
+# ```
+
+There seems to be no reason to drop out any samples based on this QC step.
+
+```{r Calculate variable genes}
+var_genes <- apply(logcounts, 1, var)
+```
+
+```{r Top 250 variable genes}
+# Find 200 top variable genes
+select_var <- names(sort(var_genes, decreasing=TRUE))[1:250]
+```
+
+```{r Subset logcounts matrix}
+# Drop genes without enough variation
+highly_variable_lcpm <- logcounts[select_var,]
+colnames(highly_variable_lcpm) <- paste(htseq.counts.dge$samples$group,"_",colnames(highly_variable_lcpm), sep="")
+```
+
+```{r Switch gene labels to symbols}
+# Mapping ensg to gene symbols
+engs.ids <- rownames(highly_variable_lcpm)
+rownames(highly_variable_lcpm) <- ann.f$SYMBOL[match(engs.ids, ann.f$ENSEMBL)]
+```
+
+```{r Plot top 250 genes heatmap, fig.width=12, fig.height=24}
+## Get some nicer colours
+mypalette <- brewer.pal(11,"RdYlBu")
+morecols <- colorRampPalette(mypalette)
+
+# Set up colour vector for celltype variable
+col.cell <- c("red","yellow","green")[htseq.counts.dge$samples$group]
+
+# Plot the heatmap
+h1 <- heatmap.2(highly_variable_lcpm,col=rev(morecols(50)),trace="none", main="Top 250 most variable genes across samples",ColSideColors=col.cell,scale="row", hclustfun = function(x) hclust(x, method="ward.D2"), distfun = function(x) as.dist(1-cor(t(x))), margins = c(10,10), cexCol=.7)
+
+legend("topright", title = "Sample type",legend=c("Porocarcinoma","Poroma","Skin"),
+       fill=c("red","yellow","green"), cex=0.8, box.lty=0)
+```
+
+```{r Draw separate heatmap from selected known poro genes, fig.width=12, fig.height=18}
+known.poro.ensg <- htseq.counts.dge$genes$ENSEMBL[match(poro.known.genes$Symbol, htseq.counts.dge$genes$SYMBOL)]
+known.poro.ensg <- known.poro.ensg[!is.na(known.poro.ensg)]
+
+known.poro.mat <- logcounts[known.poro.ensg,]
+colnames(known.poro.mat) <- paste(htseq.counts.dge$samples$group,"_",colnames(known.poro.mat), sep="")
+
+rownames(known.poro.mat) <- htseq.counts.dge$genes$SYMBOL[match(known.poro.ensg, htseq.counts.dge$genes$ENSEMBL)]
+
+
+## Get some nicer colours
+mypalette <- brewer.pal(11,"RdYlBu")
+morecols <- colorRampPalette(mypalette)
+
+# Set up colour vector for celltype variable
+col.cell <- c("red","yellow","green")[htseq.counts.dge$samples$group]
+
+# Plot the heatmap
+h2 <- heatmap.2(known.poro.mat,col=rev(morecols(50)),trace="none", main="Selected known porocarcinoma related genes",ColSideColors=col.cell,scale="row", hclustfun = function(x) hclust(x, method="ward.D2"), distfun = function(x) as.dist(1-cor(t(x))), margins = c(30,10), cexCol=.7, cexRow = 1.5)
+
+legend("topright", title = "Sample type",legend=c("Porocarcinoma","Poroma","Skin"),
+       fill=c("red","yellow","green"), cex=0.8, box.lty=0)
+```
+
+
+```{r Run pvclust, fig.width=12}
+# pvclust.highly.variable <- pvclust(highly_variable_lcpm, method.hclust="ward.D2", method.dist="correlation", parallel = FALSE, nboot=5000)
+# plot(pvclust.highly.variable)
+```
+
+```{r Calculate and draw UMAP, fig.width=12, fig.height=12}
+#colnames(logcounts) <- paste(htseq.counts.dge$samples$group,"_",colnames(logcounts), sep="")
+#logcounts.umap <- umap(t(logcounts), method="naive", min_dist=0.01, spread=0.1)
+
+umap.tb <- tibble(x=logcounts.umap$layout[,1],y=logcounts.umap$layout[,2],sample_name=rownames(htseq.counts.dge$samples), sample.type=factor(str_extract(rownames(logcounts.umap$layout), pattern = "^[a-z]*")))
+
+ggplot(umap.tb, aes(x=x, y=y)) + geom_point(aes(colour=sample.type)) + theme_minimal() + geom_label_repel(aes(label = sample_name), segment.color = 'grey50')
+```
+
+Here I used advanced dimensional reduction method called UMAP. It is used a lot in the sc-seq side, but it has been shown outperform PCA in bulk RNA seq data as well. It is done here from entire dataset with aim to show which samples look like each others in terms of their transcriptomic profile. Each dot is one sample, with sample type described according to the legend. Axes are not meant to be interpretable in other way than indication of similarity/difference between samples. These groups form sensible sets for DGE analysis.
+
+
+```{r}
+fviz_nbclust(umap.tb[,1:2], kmeans, method = "silhouette")
+```
+
+```{r}
+k2 <- kmeans(umap.tb[,1:2], centers = 3, nstart = 25)
+fviz_cluster(k2, data = umap.tb[,1:2])
+```
+
+```{r}
+htseq.counts.dge.2 <- estimateDisp(htseq.counts.dge)
+htseq.counts.dge.2$samples$group <- k2$cluster
+```
+
+# Results {.tabset}
+
+## Group 1 vs 2 diff exp test
+
+```{r}
+diff.g.1.2 <- exactTest(htseq.counts.dge.2, pair=c(1,2))
+diff.top.1.2 <- topTags(diff.g.1.2, n = 200, p.value = 0.05, sort.by="logFC")
+create_dt(data.frame(diff.top.1.2$table))
+```
+Top (logFC) 200 genes
+
+## Group 1 vs 3 diff exp test
+
+```{r}
+diff.g.1.3 <- exactTest(htseq.counts.dge.2, pair=c(1,3))
+diff.top.1.3 <- topTags(diff.g.1.3, n = 200, p.value = 0.05, sort.by="logFC")
+create_dt(data.frame(diff.top.1.3$table))
+```
+Top (logFC) 200 genes
+
+## Group 2 vs 3 diff exp test
+
+```{r}
+diff.g.2.3 <- exactTest(htseq.counts.dge.2, pair=c(2,3))
+diff.top.2.3 <- topTags(diff.g.2.3, n = 200, p.value = 0.05, sort.by="logFC")‡˜
+create_dt(data.frame(diff.top.2.3$table))
+```
+Top (logFC) 200 genes
+
+## Poroma vs Porocarcinoma diff exp test
+
+```{r Running diff. exp. analysis between poroma and porocarcinoma}
+# htseq.counts.dge$samples$MCPyV <- htseq.counts.dge$samples$group
+# htseq.counts.dge$samples$group <- htseq.counts.dge$samples$MM_death
+# 
+htseq.counts.dge <- estimateDisp(htseq.counts.dge)
+diff.g <- exactTest(htseq.counts.dge, pair=c("poroma","porocarcinoma"))
+diff.genes.all <- as_tibble(data.frame(topTags(diff.g, n = nrow(diff.g$genes), p.value = 0.05, sort.by="logFC")))
+create_dt(diff.genes.all)
+```
+
+
+
+# Extra 
+
+```{r Save image}
+save.image(paste("Porocarcinoma.image.",run.date,".RData"))
+```
+
+```{r sessionInfo}
+sessionInfo()
+```
+
+
