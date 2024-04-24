@@ -1,6 +1,12 @@
 ---
 title: "R Notebook of processing Bluebee bulk RNA sequenced porocarcinoma samples"
-output: html_notebook
+date: "`r format(Sys.Date(), '%B %d, %Y')`"
+author: "Sami Kilpinen"
+output: 
+  html_notebook:
+    toc: true
+    toc_depth: 2
+    code_folding: hide
 ---
 
 
@@ -25,7 +31,7 @@ library(ggrepel)
 library(reticulate)
 library(umap)
 library(factoextra)
-source("../../generic code/AuxFunctions.R")
+source("../../AuxCode/AuxFunctions.R")
 ```
 
 ```{r Setting some variables}
@@ -38,7 +44,7 @@ poro.known.genes <- readxl::read_xlsx("../analysis/Poroca_aiemmin_tunnetut_geeni
 ```
 
 ```{r Reading Bluebee htseq count files}
-data.directories <- list.dirs(path = "/Volumes/VarastoPool/University_research_data/Porocarcinoma/transkriptomidata/bluebee_data/",recursive = FALSE)
+data.directories <- list.dirs(path = "/Volumes/VarastoNAS/UniversityData/Poro/transkriptomidata/bluebee_data/",recursive = FALSE)
 htseq.counts <- lapply(data.directories, function(d){
   data.sub.folders <- list.dirs(path = d,recursive = FALSE)
   htseq.count.folder.i <- str_which(string=data.sub.folders,pattern = "htseq-count.*")
@@ -55,11 +61,15 @@ ensg.id.row.i <- str_which(htseq.counts.tb$ensg_id, pattern = "^ENSG.*")
 ```
 
 ```{r Reading clinical metadata}
-sample.data <- readxl::read_xlsx("/Users/kilpinen/OneDrive - University of Helsinki/Porokarsinooma/SampleData/SampleData.xlsx", sheet="ForR", col_names = TRUE)
+sample.data <- readxl::read_xlsx("/Users/samwise/OneDrive - University of Helsinki/Harri/Porokarsinooma/SampleData/SampleData.xlsx", sheet="ForR", col_names = TRUE)
 ```
 
 
 ```{r # Filter count data and clinical data to match each other}
+# Droppin P15, P48, P6
+
+htseq.counts.tb <- htseq.counts.tb[,!str_detect(colnames(htseq.counts.tb),pattern = "P6_.*|P15_.*|P48_.*")]
+
 # Samples with clinical metadata
 samples.wt.clin.data <- colnames(htseq.counts.tb[-1])[str_extract(colnames(htseq.counts.tb[-1]), pattern = "^\\w\\d+") %in% sample.data$`Sample ID`]
 htseq.counts.tb.f <- htseq.counts.tb[,c("ensg_id",paste(samples.wt.clin.data, sep=","))]
@@ -77,7 +87,7 @@ htseq.counts.df.f <-htseq.counts.df.f[ensg.id.row.i,]
 sample.data.f <- sample.data[match(str_extract(samples.wt.clin.data, pattern = "^\\w\\d+"),sample.data$`Sample ID`),]
 ```
 
-```{r Fetching annotation from AnnotationHub}
+```{r Fetching annotation from AnnotationHub, echo=FALSE}
 ah <- AnnotationHub()
 orgs <- subset(ah, ah$rdataclass == "OrgDb")
 orgdb <- query(orgs, "Homo sapiens")[[1]]
@@ -114,20 +124,6 @@ boxplot(logcounts, xlab="", ylab="Log2 counts per million",las=2)
 abline(h=median(logcounts),col="blue")
 title("Boxplots of logCPMs (unnormalised)")
 ```
-
-# ```{r Calculate outliers in terms of median}
-# # +-10% range around median of medians
-# median.of.medians <- median(colMedians(logcounts))
-# range.10 <- median.of.medians*.10
-# accepted.samples <- which(colMedians(logcounts) > median.of.medians-range.10 & colMedians(logcounts) < median.of.medians+range.10)
-# ```
-# 
-# ```{r Dropping samples based on logcount filtering}
-# # Dropping samples of which median is more than +-10% outside of median of medians
-# # Transforming data to logcounts
-# htseq.counts.dge <- htseq.counts.dge[,accepted.samples]
-# logcounts <- logcounts[,accepted.samples]
-# ```
 
 There seems to be no reason to drop out any samples based on this QC step.
 
@@ -199,7 +195,7 @@ legend("topright", title = "Sample type",legend=c("Porocarcinoma","Poroma","Skin
 
 ```{r Calculate and draw UMAP, fig.width=12, fig.height=12}
 #colnames(logcounts) <- paste(htseq.counts.dge$samples$group,"_",colnames(logcounts), sep="")
-#logcounts.umap <- umap(t(logcounts), method="naive", min_dist=0.01, spread=0.1)
+logcounts.umap <- umap(t(logcounts), method="naive", min_dist=0.01, spread=0.1)
 
 umap.tb <- tibble(x=logcounts.umap$layout[,1],y=logcounts.umap$layout[,2],sample_name=rownames(htseq.counts.dge$samples), sample.type=factor(str_extract(rownames(logcounts.umap$layout), pattern = "^[a-z]*")))
 
@@ -247,7 +243,7 @@ Top (logFC) 200 genes
 
 ```{r}
 diff.g.2.3 <- exactTest(htseq.counts.dge.2, pair=c(2,3))
-diff.top.2.3 <- topTags(diff.g.2.3, n = 200, p.value = 0.05, sort.by="logFC")‡˜
+diff.top.2.3 <- topTags(diff.g.2.3, n = 200, p.value = 0.05, sort.by="logFC")
 create_dt(data.frame(diff.top.2.3$table))
 ```
 Top (logFC) 200 genes
