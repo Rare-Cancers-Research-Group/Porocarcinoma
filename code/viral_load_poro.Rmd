@@ -1,0 +1,100 @@
+---
+title: "R Notebook of Porocarcinoma viral load"
+output: html_notebook
+---
+
+```{r, echo=FALSE}
+library(tidyverse)
+source("../../AuxCode/AuxFunctions.R")
+```
+
+# Porocarcinoma {.tabset}
+
+```{r Data for Poro, echo=FALSE}
+viral_poro <- read_tsv(file="../../ViralInt/outdir_tsv_poro_210224/concatenated.tsv") 
+viral_poro <- viral_poro %>%
+  mutate(SampleID_from_Filename = word(Filename, 1, sep = "_"))
+sample_clin <- read_csv("../samplef.csv")
+```
+
+```{r}
+joined_data <- left_join(viral_poro, sample_clin, by = c("SampleID_from_Filename" = "Sample ID"))
+```
+
+```{r}
+# Find the top 6 viruses based on frac_coverage
+top_viruses <- joined_data %>%
+  group_by(virus) %>%
+  summarise(Avg_frac_covered = mean(frac_covered, na.rm = TRUE)) %>%
+  arrange(desc(Avg_frac_covered)) %>%
+  slice_head(n = 6)
+
+# Join back with the original data to filter only for top 3 viruses
+filtered_data <- joined_data %>%
+  filter(virus %in% pull(top_viruses,virus))
+```
+
+```{r}
+# Calculate standard error of the mean for frac_covered
+grouped_means <- filtered_data %>%
+  group_by(Sample_Type, virus) %>%
+  summarise(
+    Mean_frac_covered = mean(frac_covered, na.rm = TRUE),
+    SEM = sd(frac_covered, na.rm = TRUE) / sqrt(n())
+  ) %>%
+  ungroup()
+```
+
+```{r, fig.width=10, fig.height=10}
+# Find the maximum value of Mean_frac_covered + SEM for setting the y-axis limit
+max_y_value <- max(grouped_means$Mean_frac_covered + grouped_means$SEM, na.rm = TRUE)
+
+# Creating the facetted bar plot with error bars for the updated column names
+ggplot(grouped_means, aes(x = Sample_Type, y = Mean_frac_covered, fill = Sample_Type)) +
+  geom_bar(stat = "identity", position = position_dodge()) +
+  geom_errorbar(aes(ymin = Mean_frac_covered - SEM, ymax = Mean_frac_covered + SEM),
+                width = 0.25, position = position_dodge(0.9)) +
+  facet_wrap(~ virus, scales = "free_y") +
+  theme_minimal() +
+  labs(title = "Mean Frac_Covered of Top 6 Viruses by Sample Type with Error Bars",
+       x = "Sample Type",
+       y = "Mean Frac_Covered") +
+  scale_fill_brewer(palette = "Pastel1") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  expand_limits(y = max_y_value * 1.1) # Extend the y-axis slightly beyond the max value
+
+```
+
+```{r}
+viral_poro_summary <- viral_poro %>% group_by(virus) %>% summarise(across(c("frac_covered"), ~ mean(., na.rm = TRUE))) %>% arrange(desc(frac_covered))
+create_dt(viral_poro_summary)
+```
+
+```{r}
+# Process the data to get top 5 frac_covered values per SampleID_from_Filename
+top5_data <- viral_poro %>%
+  group_by(SampleID_from_Filename) %>%
+  arrange(desc(frac_covered)) %>%
+  slice_head(n = 5) %>%
+  ungroup() %>% filter(!SampleID_from_Filename %in% c("P48","P6"))
+```
+
+```{r}
+viral.plot.1 <- ggplot(top5_data, aes(x = SampleID_from_Filename, y = frac_covered, fill = virus)) +
+     geom_bar(stat = "identity", position = position_dodge(width = 0.9), color = "black") +
+     scale_fill_manual(values = c("TRUE" = "steelblue", "FALSE" = "grey"), guide = "none") +
+     geom_text(aes(label = ifelse(frac_covered > 0.05, virus, "")), 
+               vjust = -0.5, color = "black", position = position_dodge(width = 0.9)) +
+     labs(title = "Top 5 frac_covered values per sample",
+          x = "Sample",
+          y = "Fraction Covered") +
+     theme_minimal() +
+     theme(axis.text.x = element_text(angle = 45, hjust = 1, size = rel(2))) # Increase x-axis tick label size
+
+ggsave("top5_frac_covered.pdf", plot = viral.plot.1, device = "pdf", width = 12, height = 7)
+```
+
+```{r}
+sessionInfo()
+```
+
