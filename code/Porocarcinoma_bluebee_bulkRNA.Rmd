@@ -93,8 +93,17 @@ orgs <- subset(ah, ah$rdataclass == "OrgDb")
 orgdb <- query(orgs, "Homo sapiens")[[1]]
 ann <- select(orgdb,keys=rownames(htseq.counts.df.f),keytype="ENSEMBL", columns=c("SYMBOL","GENETYPE","GENENAME"))
 
+# Fetch chromosome information using biomaRt
+mart <- useMart("ensembl", dataset = "hsapiens_gene_ensembl")
+chrom_info <- getBM(attributes = c("ensembl_gene_id", "chromosome_name"), 
+                    filters = "ensembl_gene_id", 
+                    values = rownames(htseq.counts.df.f), 
+                    mart = mart)
+
+genes.in.sel.chr <- chrom_info$ensembl_gene_id[chrom_info$chromosome_name %in% c(seq(1:22),"X")]
+
 # Picking only data for genes having genetype=="protein-coding"
-ann.f <- dplyr::filter(ann,ann$GENETYPE=="protein-coding")
+ann.f <- dplyr::filter(ann,ann$GENETYPE=="protein-coding" & ann$ENSEMBL %in% genes.in.sel.chr)
 htseq.counts.df.f <- htseq.counts.df.f[ann.f$ENSEMBL,]
 ```
 
@@ -148,7 +157,7 @@ engs.ids <- rownames(highly_variable_lcpm)
 rownames(highly_variable_lcpm) <- ann.f$SYMBOL[match(engs.ids, ann.f$ENSEMBL)]
 ```
 
-```{r Plot top 250 genes heatmap, fig.width=12, fig.height=24}
+```{r Plot top 250 genes heatmap, fig.width=12, fig.height=28}
 ## Get some nicer colours
 mypalette <- brewer.pal(11,"RdYlBu")
 morecols <- colorRampPalette(mypalette)
@@ -157,7 +166,7 @@ morecols <- colorRampPalette(mypalette)
 col.cell <- c("red","yellow","green")[htseq.counts.dge$samples$group]
 
 # Plot the heatmap
-h1 <- heatmap.2(highly_variable_lcpm,col=rev(morecols(50)),trace="none", main="Top 250 most variable genes across samples",ColSideColors=col.cell,scale="row", hclustfun = function(x) hclust(x, method="ward.D2"), distfun = function(x) as.dist(1-cor(t(x))), margins = c(10,10), cexCol=.7)
+h1 <- heatmap.2(highly_variable_lcpm,col=rev(morecols(50)),trace="none", main="Top 250 most variable genes across samples",ColSideColors=col.cell,scale="row", hclustfun = function(x) hclust(x, method="ward.D2"), distfun = function(x) as.dist(1-cor(t(x))), margins = c(14,10), cexCol=.7)
 
 legend("topright", title = "Sample type",legend=c("Porocarcinoma","Poroma","Skin"),
        fill=c("red","yellow","green"), cex=0.8, box.lty=0)
